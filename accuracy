@@ -1,0 +1,38 @@
+def pixel_accuracy(pred_mask, gt_mask):
+    """
+    pred_mask: torch tensor, shape [H, W], 每个元素是 0~num_classes-1
+    gt_mask: torch tensor, shape [H, W], 与 pred_mask 同尺寸
+    """
+    correct = (pred_mask == gt_mask).sum().item()
+    total = gt_mask.numel()
+    acc = correct / total
+ return acc
+
+# whole map accuracy
+pred_mask = predict_bse(model, img_path, patch_size=256)
+gt_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+gt_mask = torch.tensor(gt_mask, dtype=torch.long)
+
+acc = pixel_accuracy(pred_mask, gt_mask)
+print(f"Pixel Accuracy: {acc*100:.2f}%")
+
+
+# each class accuracy
+def class_accuracy(pred_mask, gt_mask, num_classes=4):
+    acc_dict = {}
+    for cls in range(num_classes):
+        cls_total = (gt_mask == cls).sum().item()
+        if cls_total == 0:
+            acc_dict[cls] = None  # 数据集中没这个类别
+        else:
+            cls_correct = ((pred_mask == cls) & (gt_mask == cls)).sum().item()
+            acc_dict[cls] = cls_correct / cls_total
+    return acc_dict
+
+# 使用示例
+acc_cls = class_accuracy(pred_mask, gt_mask)
+for cls, a in acc_cls.items():
+    if a is not None:
+        print(f"Class {cls} accuracy: {a*100:.2f}%")
+    else:
+        print(f"Class {cls} not present in GT")
