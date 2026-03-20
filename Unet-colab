@@ -88,4 +88,34 @@ class BSEPatchDataset(Dataset):
         assert mask.max()<=3
 
         return image, mask
+
+# 数据加载与预处理
+dataset = BSEPatchDataset(
+    image_dir="/content/drive/MyDrive/BSE_CNN/dataset/train/img",
+    mask_dir="/content/drive/MyDrive/BSE_CNN/dataset/train/mask",
+    patch_size=256
+)
+
+print("Total patches:", len(dataset))
      
+
+from torch.utils.data import DataLoader
+
+loader = DataLoader(
+    dataset,
+    batch_size=7,
+    shuffle=True,
+    num_workers=2
+)
+# DataLoader：将切好的 Patch 打包成 Batch。这里 batch_size=7 意味着模型一次学习 7 张小图。shuffle=True 保证每轮训练数据的顺序都是随机的，增加泛化能力。  
+
+!pip install segmentation-models-pytorch --quiet
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import segmentation_models_pytorch as smp
+import matplotlib.pyplot as plt
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
