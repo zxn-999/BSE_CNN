@@ -2,3 +2,7 @@ from google.colab import drive
 drive.mount('/content/drive')
 # 链接Google drive
 
+import torch
+print(torch.__version__)
+print(torch.cuda.is_available())
+
