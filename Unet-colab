@@ -6,3 +6,86 @@ import torch
 print(torch.__version__)
 print(torch.cuda.is_available())
 
+import os
+import cv2
+import torch
+from torch.utils.data import Dataset
+import numpy as np
+# 导入库与类定义
+# os / cv2 (OpenCV): 用于处理文件路径和读取图像。
+# torch / Dataset: PyTorch 的标准数据加载工具，方便后续配合 DataLoader 使用。
+# BSEPatchDataset(Dataset): 定义数据集类，必须实现 __len__ 和 __getitem__ 方法。
+
+class BSEPatchDataset(Dataset):
+    def __init__(self, image_dir, mask_dir, patch_size=256):  # 初始化方法 __init__
+        self.image_dir = image_dir   # 原始图像文件夹路径
+        self.mask_dir = mask_dir     # 标签（掩码）图像文件夹路径
+        self.patch_size = patch_size  # 设定的切割块大小（如256x256）
+       
+        # 筛选并排序所有 .tif 格式的文件名
+        self.image_files = sorted([
+            f for f in os.listdir(image_dir)
+            if f.endswith(".tif")
+        ])
+
+        self.patches = []       # 初始化一个列表，用于存储每个小块的坐标信息
+        self._prepare_patches()   # 调用私有方法来计算所有可能的切块坐标
+
+    def _prepare_patches(self):                     # 切块预处理 _prepare_patches; 这个方法并不直接切割图像，而是计算出每个 Patch 在原图中的左上角坐标 (x, y)。
+        for img_name in self.image_files:
+            img_path = os.path.join(self.image_dir, img_name)
+            # 假设掩码文件名是原名加上 "_mask.tif"
+            mask_path = os.path.join(
+                self.mask_dir,
+                img_name.replace(".tif", "_mask.tif")
+            )
+            # 以灰色模式读取图像以获取其高(h)和宽(w)
+            image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+
+            h, w = image.shape
+            # 使用嵌套循环按步长（patch_size）遍历图像
+            for y in range(0, h - self.patch_size + 1, self.patch_size):
+                for x in range(0, w - self.patch_size + 1, self.patch_size):
+                    # 将该 Patch 所属的文件路径及坐标存入列表
+                    self.patches.append((
+                        img_path,
+                        mask_path,
+                        x, y
+                    ))
+
+    def __len__(self):          #获取数据集大小 __len__
+        # 返回整个数据集的总块数
+        return len(self.patches)
+
+# 获取单条数据 __getitem__; 这是最关键的方法，当 DataLoader 请求数据时会调用它。
+    def __getitem__(self, idx):
+        # 根据索引获取预存的路径和坐标信息
+        img_path, mask_path, x, y = self.patches[idx]
+        # 再次读取图像（这种做法节省内存，不一次性把所有图载入内存）
+        image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        # 根据坐标 (x, y) 裁剪出特定大小的小块
+        image = image[y:y+self.patch_size, x:x+self.patch_size]
+        mask = mask[y:y+self.patch_size, x:x+self.patch_size]
+        # 图像处理：转为Tensor -> 转为浮点数 -> 增加通道维(C,H,W) -> 归一化到 [0, 1]
+        image = torch.from_numpy(image).float().unsqueeze(0) / 255.0
+        # 标签处理：转为长整型 Tensor（用于分类损失函数计算）
+        mask = torch.from_numpy(mask).long()
+
+        # Debug print before clamping
+        # print(f"Before clamp - Image: {img_path}, Mask: {mask_path}, Patch_x: {x}, Patch_y: {y}, Mask max: {mask.max().item()}")
+
+        # Clip mask values to ensure they are within [0, 3] for 4 classes
+        # 核心逻辑：将标签像素值强制限制在 [0, 3] 之间
+        # 这通常是因为数据可能存在噪声或错误的像素值，确保符合 4 分类任务
+        mask = torch.clamp(mask, min=0, max=3)
+
+        # Debug print after clamping
+        # print(f"After clamp - Image: {img_path}, Mask: {mask_path}, Patch_x: {x}, Patch_y: {y}, Mask max: {mask.max().item()}")
+        # 安全检查：如果最大值超过 3，程序会直接报错，防止训练出错
+        # safety check
+        assert mask.max()<=3
+
+        return image, mask
+     
