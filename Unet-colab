@@ -116,6 +116,241 @@ import torch.nn as nn
 import torch.optim as optim
 import segmentation_models_pytorch as smp
 import matplotlib.pyplot as plt
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+#计算类权重 —— 解决样本不均衡
+num_classes = 4
+
+# 统计整个 dataset 的像素数量
+class_counts = torch.zeros(num_classes)
+for i, (img, mask) in enumerate(dataset):
+    try:
+        for c in range(num_classes):
+            class_counts[c] += torch.sum(mask == c)
+    except AssertionError as e:
+        # Access the problematic patch info directly from the dataset
+        # dataset.patches stores (img_path, mask_path, x, y)
+        img_path, mask_path, _, _ = dataset.patches[i]
+        print(f"AssertionError caught for image: {img_path}, mask: {mask_path}")
+        print(f"The problematic mask had max value: {mask.max().item()}")
+        # Optionally re-raise if you want to stop execution after finding the first one
+        # raise e
+
+total_pixels = class_counts.sum()
+class_weights = total_pixels / (num_classes * class_counts)
+class_weights = class_weights.to(device)
+
+criterion = nn.CrossEntropyLoss(weight=class_weights)
+# 意义：在显微镜像中，背景通常很多，而某些感兴趣的组织（如孔隙）很少。如果直接训练，模型会倾向于预测全是背景。
+# 逻辑：代码先统计了所有 Patch 中 4 个类别的像素总数。计算出的 class_weights 会让模型在分错“稀有类别”时受到更大的惩罚，从而平衡学习效果。
+print("Class weights:", class_weights)
+
+# 模型初始化
+model = smp.Unet(
+    encoder_name="resnet34", # 使用 ResNet34 作为特征提取器
+    encoder_weights=None,    # 不使用预训练权重
+    in_channels=1,      # BSE 灰度图, 因为是灰度图，所以输入通道为 1
+    classes=num_classes  # 输出 4 个类别
+).to(device)
+# smp.Unet：调用了 segmentation_models_pytorch 库。它定义了一个标准的 U-Net 结构，但把左半部分（编码器）替换成了性能更好的 ResNet34。
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+# 训练循环
+num_epochs = 10
+# 意义：这是模型进化的过程。代码设置了 num_epochs = 10，意味着模型会将整个数据集完整地看 10 遍。
+for epoch in range(num_epochs):
+    model.train()
+    running_loss = 0.0
+    for images, masks in loader:
+        images = images.to(device)
+        masks = masks.to(device)
+
+        optimizer.zero_grad()     # 清空梯度
+        outputs = model(images)  # shape [B, num_classes, H, W] # 前向传播：模型做预测
+        loss = criterion(outputs, masks)   # 计算预测值与真实值的差距
+        loss.backward()                    # 反向传播：计算梯度
+        optimizer.step()                   # 更新参数
+
+        running_loss += loss.item() * images.size(0)
+
+    epoch_loss = running_loss / len(loader.dataset)
+    print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}")
+
+model.eval()
+with torch.no_grad():
+    images, masks = next(iter(loader))
+    images = images.to(device)
+    masks = masks.to(device)
+    outputs = model(images)
+    preds = outputs.argmax(dim=1)
+
+    # 可视化第一张 patch
+    fig, axs = plt.subplots(1,3,figsize=(12,4))
+    axs[0].imshow(images[0,0].cpu(), cmap='gray')
+    axs[0].set_title('Input BSE Patch')
+    axs[1].imshow(preds[0].cpu(), cmap='jet', vmin=0, vmax=num_classes-1)
+    axs[1].set_title('Predicted Mask')
+    axs[2].imshow(masks[0].cpu(), cmap='jet', vmin=0, vmax=num_classes-1)
+    axs[2].set_title('Ground Truth Mask')
+    plt.show()
+
+for idx in range(images.size(0)):
+    print(f"--- Patch {idx} ---")
+    total_pix = preds[idx].numel()
+    for c in range(num_classes):
+        c_pix = (preds[idx]==c).sum().item()
+        print(f"Class {c}: {c_pix} pixels, {c_pix/total_pix*100:.2f}%")
+    print("Ground truth distribution:")
+    for c in range(num_classes):
+        c_pix = (masks[idx]==c).sum().item()
+        print(f"Class {c}: {c_pix} pixels, {c_pix/total_pix*100:.2f}%")
+
+import os
+import cv2
+import torch
+import matplotlib.pyplot as plt
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+# ===============================
+# 1️⃣ 测试图像路径
+test_image_dir = "/content/drive/MyDrive/BSE_CNN/dataset/test/img/"
+test_mask_dir = "/content/drive/MyDrive/BSE_CNN/dataset/test/mask/"
+
+test_image_files = sorted([
+    f for f in os.listdir(test_image_dir)
+    if f.endswith(".tif")
+])
+
+def predict_bse(model, image_path, patch_size=256):
+    """
+    Patch-based 推理 + padding + 边缘处理
+    """
+    model.eval()
+
+    # 读取灰度图
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    h, w = image.shape
+
+    # Step 1: padding 到 patch_size 的整数倍
+    pad_h = (patch_size - h % patch_size) % patch_size
+    pad_w = (patch_size - w % patch_size) % patch_size
+    image_padded = np.pad(image, ((0, pad_h), (0, pad_w)), mode='reflect')
+    H, W = image_padded.shape
+
+    # Step 2: 初始化预测 mask
+    pred_mask_padded = torch.zeros((H, W), dtype=torch.long)
+
+    # Step 3: patch-based 推理（保证右下角也覆盖）
+    stride = patch_size
+    y_max = H - patch_size if H > patch_size else 0
+    x_max = W - patch_size if W > patch_size else 0
+
+    y_positions = list(range(0, H - patch_size + 1, stride))
+    x_positions = list(range(0, W - patch_size + 1, stride))
+
+    # 确保右边和底部边缘被覆盖
+    if y_max not in y_positions:
+        y_positions.append(y_max)
+    if x_max not in x_positions:
+        x_positions.append(x_max)
+
+    with torch.no_grad():
+        for y in y_positions:
+            for x in x_positions:
+                patch = image_padded[y:y+patch_size, x:x+patch_size]
+                patch_tensor = torch.tensor(patch, dtype=torch.float32).unsqueeze(0).unsqueeze(0)/255.0
+                patch_tensor = patch_tensor.to(device)
+                output = model(patch_tensor)
+                pred = output.argmax(dim=1).squeeze(0).cpu()
+                pred_mask_padded[y:y+patch_size, x:x+patch_size] = pred
+
+    # Step 4: 裁回原始尺寸
+    pred_mask = pred_mask_padded[:h, :w]
+    return pred_mask
+
+def visualize_prediction(image_path, pred_mask, mask_path=None):
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    fig, axs = plt.subplots(1,3 if mask_path else 2, figsize=(12,4))
+    axs[0].imshow(image, cmap='gray')
+    axs[0].set_title('Input BSE Image')
+
+    axs[1].imshow(pred_mask, cmap='jet', vmin=0, vmax=3)
+    axs[1].set_title('Predicted Mask')
+
+    if mask_path:
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        axs[2].imshow(mask, cmap='jet', vmin=0, vmax=3)
+        axs[2].set_title('Ground Truth Mask')
+
+    plt.show()
+
+for img_file in test_image_files:
+    img_path = os.path.join(test_image_dir, img_file)
+    mask_path = os.path.join(test_mask_dir, img_file.replace(".tif","_mask.tif"))
+    pred_mask = predict_bse(model, img_path, patch_size=256)
+
+    if os.path.exists(mask_path):
+        visualize_prediction(img_path, pred_mask, mask_path)
+    else:
+        visualize_prediction(img_path, pred_mask)
+
+import os
+import cv2
+import torch
+
+# 测试图像和 mask 的目录
+test_image_dir = "/content/drive/MyDrive/BSE_CNN/dataset/test/img/"
+test_mask_dir = "/content/drive/MyDrive/BSE_CNN/dataset/test/mask/"
+
+# 获取所有测试图像文件
+test_image_files = sorted([
+    f for f in os.listdir(test_image_dir) if f.endswith(".tif")
+])
+
+# --- Accuracy 函数 ---
+def pixel_accuracy(pred_mask, gt_mask):
+    correct = (pred_mask == gt_mask).sum().item()
+    total = gt_mask.numel()
+    return correct / total
+
+def class_accuracy(pred_mask, gt_mask, num_classes=4):
+    acc_dict = {}
+    for cls in range(num_classes):
+        cls_total = (gt_mask == cls).sum().item()
+        if cls_total == 0:
+            acc_dict[cls] = None  # 数据集中没这个类别
+        else:
+            cls_correct = ((pred_mask == cls) & (gt_mask == cls)).sum().item()
+            acc_dict[cls] = cls_correct / cls_total
+    return acc_dict
+
+# --- 批量测试 ---
+pixel_acc_list = []
+for img_file in test_image_files:
+    img_path  = os.path.join(test_image_dir, img_file)
+    mask_path = os.path.join(test_mask_dir, img_file.replace(".tif","_mask.tif"))
+
+    # 预测
+    pred_mask = predict_bse(model, img_path, patch_size=256)
+
+    # 读取 ground truth
+    gt_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+    gt_mask = torch.tensor(gt_mask, dtype=torch.long)
+
+    # 整图 pixel accuracy
+    acc = pixel_accuracy(pred_mask, gt_mask)
+    pixel_acc_list.append(acc)
+    print(f"{img_file}: Pixel Accuracy = {acc*100:.2f}%")
+
+    # 每类 accuracy
+    acc_cls = class_accuracy(pred_mask, gt_mask)
+    for cls, a in acc_cls.items():
+        if a is not None:
+            print(f"    Class {cls} accuracy: {a*100:.2f}%")
+        else:
+            print(f"    Class {cls} not present in GT")
+
+# --- 平均 Accuracy ---
+mean_acc = sum(pixel_acc_list) / len(pixel_acc_list)
+print(f"\nMean Pixel Accuracy over {len(test_image_files)} images: {mean_acc*100:.2f}%")
