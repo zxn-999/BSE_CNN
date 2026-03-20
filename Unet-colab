@@ -1,1 +1,4 @@
+from google.colab import drive
+drive.mount('/content/drive')
+# 链接Google drive
 
