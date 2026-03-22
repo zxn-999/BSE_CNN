@@ -1,0 +1,95 @@
+代码运行结果
+1. 训练和validate结果
+Epoch [1/10] Total: 5.9597 | Dice: 2.3145 | CE: 3.6452
+
+--- Epoch [1/10] Validation Summary ---
+Class 0: Recall=0.9338, Fall-out=0.0391, IoU=0.7115, F1=0.8127
+Class 1: Recall=0.8517, Fall-out=0.0850, IoU=0.7393, F1=0.8419
+Class 2: Recall=0.8068, Fall-out=0.0466, IoU=0.7618, F1=0.8595
+Class 3: Recall=0.9110, Fall-out=0.0405, IoU=0.7041, F1=0.8105
+------------------------------
+Epoch [2/10] Total: 4.5215 | Dice: 1.6807 | CE: 2.8408
+
+--- Epoch [2/10] Validation Summary ---
+Class 0: Recall=0.8619, Fall-out=0.0168, IoU=0.7505, F1=0.8430
+Class 1: Recall=0.9036, Fall-out=0.0693, IoU=0.7984, F1=0.8846
+Class 2: Recall=0.8870, Fall-out=0.0601, IoU=0.8203, F1=0.8975
+Class 3: Recall=0.8739, Fall-out=0.0167, IoU=0.7523, F1=0.8477
+------------------------------
+Epoch [3/10] Total: 4.1167 | Dice: 1.5347 | CE: 2.5820
+
+--- Epoch [3/10] Validation Summary ---
+Class 0: Recall=0.9027, Fall-out=0.0237, IoU=0.7574, F1=0.8460
+Class 1: Recall=0.8946, Fall-out=0.0646, IoU=0.7962, F1=0.8828
+Class 2: Recall=0.8832, Fall-out=0.0539, IoU=0.8254, F1=0.9007
+Class 3: Recall=0.8784, Fall-out=0.0159, IoU=0.7642, F1=0.8551
+------------------------------
+Epoch [4/10] Total: 3.8491 | Dice: 1.4258 | CE: 2.4234
+
+--- Epoch [4/10] Validation Summary ---
+Class 0: Recall=0.9174, Fall-out=0.0218, IoU=0.7685, F1=0.8552
+Class 1: Recall=0.8909, Fall-out=0.0618, IoU=0.7957, F1=0.8817
+Class 2: Recall=0.8753, Fall-out=0.0619, IoU=0.8110, F1=0.8901
+Class 3: Recall=0.8630, Fall-out=0.0228, IoU=0.7357, F1=0.8333
+------------------------------
+Epoch [5/10] Total: 3.5312 | Dice: 1.3118 | CE: 2.2194
+
+--- Epoch [5/10] Validation Summary ---
+Class 0: Recall=0.9346, Fall-out=0.0226, IoU=0.7746, F1=0.8602
+Class 1: Recall=0.8905, Fall-out=0.0480, IoU=0.8154, F1=0.8950
+Class 2: Recall=0.8909, Fall-out=0.0494, IoU=0.8366, F1=0.9075
+Class 3: Recall=0.9226, Fall-out=0.0238, IoU=0.7583, F1=0.8498
+------------------------------
+Epoch [6/10] Total: 3.4156 | Dice: 1.2653 | CE: 2.1504
+
+--- Epoch [6/10] Validation Summary ---
+Class 0: Recall=0.9059, Fall-out=0.0145, IoU=0.8000, F1=0.8774
+Class 1: Recall=0.9112, Fall-out=0.0499, IoU=0.8321, F1=0.9055
+Class 2: Recall=0.9009, Fall-out=0.0467, IoU=0.8483, F1=0.9148
+Class 3: Recall=0.9083, Fall-out=0.0218, IoU=0.7842, F1=0.8696
+------------------------------
+Epoch [7/10] Total: 3.1343 | Dice: 1.1649 | CE: 1.9694
+
+--- Epoch [7/10] Validation Summary ---
+Class 0: Recall=0.9017, Fall-out=0.0126, IoU=0.8063, F1=0.8820
+Class 1: Recall=0.9105, Fall-out=0.0472, IoU=0.8359, F1=0.9083
+Class 2: Recall=0.8926, Fall-out=0.0458, IoU=0.8426, F1=0.9111
+Class 3: Recall=0.9352, Fall-out=0.0283, IoU=0.7732, F1=0.8613
+------------------------------
+Epoch [8/10] Total: 2.9990 | Dice: 1.1074 | CE: 1.8915
+
+--- Epoch [8/10] Validation Summary ---
+Class 0: Recall=0.9230, Fall-out=0.0177, IoU=0.8043, F1=0.8792
+Class 1: Recall=0.9098, Fall-out=0.0515, IoU=0.8291, F1=0.9025
+Class 2: Recall=0.9087, Fall-out=0.0542, IoU=0.8484, F1=0.9142
+Class 3: Recall=0.8700, Fall-out=0.0130, IoU=0.7684, F1=0.8558
+------------------------------
+Epoch [9/10] Total: 2.8877 | Dice: 1.0710 | CE: 1.8167
+
+--- Epoch [9/10] Validation Summary ---
+Class 0: Recall=0.9280, Fall-out=0.0148, IoU=0.8130, F1=0.8860
+Class 1: Recall=0.9032, Fall-out=0.0430, IoU=0.8365, F1=0.9083
+Class 2: Recall=0.8851, Fall-out=0.0440, IoU=0.8375, F1=0.9066
+Class 3: Recall=0.9355, Fall-out=0.0347, IoU=0.7721, F1=0.8618
+------------------------------
+Epoch [10/10] Total: 2.7651 | Dice: 1.0275 | CE: 1.7376
+
+--- Epoch [10/10] Validation Summary ---
+Class 0: Recall=0.9183, Fall-out=0.0155, IoU=0.8003, F1=0.8738
+Class 1: Recall=0.9236, Fall-out=0.0530, IoU=0.8397, F1=0.9098
+Class 2: Recall=0.8986, Fall-out=0.0415, IoU=0.8530, F1=0.9170
+Class 3: Recall=0.9054, Fall-out=0.0180, IoU=0.7902, F1=0.8731
+------------------------------
+
+2. test 结果
+--- Starting Final Test ---
+Class      | Accuracy   | Precision  | Recall     | Fall-out   | IoU        | F1        
+-----------------------------------------------------------------
+Class 0      | 0.8860   | 0.1125    | 0.0062 | 0.0048 | 0.0055 | 0.0106
+Class 1      | 0.6246   | 0.3460    | 0.1021 | 0.0996 | 0.0832 | 0.1528
+Class 2      | 0.4868   | 0.4321    | 0.6103 | 0.6089 | 0.3362 | 0.4967
+Class 3      | 0.6688   | 0.1194    | 0.2867 | 0.2822 | 0.0842 | 0.1442
+-----------------------------------------------------------------
+Average    | 0.6665   | 0.2525    | 0.2513 | 0.2489  | 0.1273  | 0.2011
+==================================================
+<Figure size 640x480 with 0 Axes>
