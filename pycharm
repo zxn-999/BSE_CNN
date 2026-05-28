@@ -1,0 +1,416 @@
+!pip install segmentation-models-pytorch --quiet
+import os
+import cv2
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader, random_split
+import numpy as np
+import matplotlib.pyplot as plt
+import segmentation_models_pytorch as smp
+from sklearn.metrics import confusion_matrix
+from matplotlib.colors import ListedColormap
+
+print("DEVICE:", DEVICE)
+
+if DEVICE == "cuda":
+    print(torch.cuda.get_device_name(0))
+
+torch.backends.cudnn.benchmark = True
+
+# 自定义颜色（4个phase）
+colors = [
+    (0, 0, 0),        # Class 0 - 黑色
+    (1, 0, 0),        # Class 1 - 红色
+    (0, 1, 0),        # Class 2 - 绿色
+    (1, 1, 0)         # Class 3 - 蓝色
+]
+
+cmap = ListedColormap(colors)
+
+def save_tif_gray(path, img):
+    if img.dtype != np.uint8:
+        img = (img * 255).astype(np.uint8)
+    cv2.imwrite(path, img)
+
+def save_tif_color(path, label_map, cmap):
+    colored = cmap(label_map)[:, :, :3]
+    colored = (colored * 255).astype(np.uint8)
+    colored = cv2.cvtColor(colored, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(path, colored)
+
+def label_to_color(label_map):
+    colored = cmap(label_map)[:, :, :3]
+    colored = (colored * 255).astype(np.uint8)
+    colored = cv2.cvtColor(colored, cv2.COLOR_RGB2BGR)
+    return colored
+
+# 1. 基础配置与路径
+# ==========================================
+IMAGE_DIR = "/content/drive/MyDrive/BSE/images"
+MASK_DIR = "/content/drive/MyDrive/BSE/mask"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+BATCH_SIZE = 8
+EPOCHS = 20
+PATCH_SIZE = 256
+NUM_CLASSES = 4
+
+# 创建保存结果的文件夹
+OUTPUT_DIR = "/content/drive/MyDrive/BSE/output_3.22.2"
+
+VAL_IMG_DIR = os.path.join(OUTPUT_DIR, "validate/images")
+VAL_GT_DIR  = os.path.join(OUTPUT_DIR, "validate/gt")
+VAL_PRED_DIR= os.path.join(OUTPUT_DIR, "validate/pred")
+
+TEST_IMG_DIR = os.path.join(OUTPUT_DIR, "test/images")
+TEST_GT_DIR  = os.path.join(OUTPUT_DIR, "test/gt")
+TEST_PRED_DIR= os.path.join(OUTPUT_DIR, "test/pred")
+
+os.makedirs(VAL_IMG_DIR, exist_ok=True)
+os.makedirs(VAL_GT_DIR, exist_ok=True)
+os.makedirs(VAL_PRED_DIR, exist_ok=True)
+
+os.makedirs(TEST_IMG_DIR, exist_ok=True)
+os.makedirs(TEST_GT_DIR, exist_ok=True)
+os.makedirs(TEST_PRED_DIR, exist_ok=True)
+
+# 2. 数据集类定义
+# ==========================================
+class BSEPatchDataset(Dataset):
+    def __init__(self, image_dir, mask_dir, image_list, patch_size=256):
+        self.image_dir = image_dir
+        self.mask_dir = mask_dir
+        self.patch_size = patch_size
+        self.image_files = image_list
+        self.patches = []
+        self._prepare_patches()
+
+    def _prepare_patches(self):
+        for img_name in self.image_files:
+            img_path = os.path.join(self.image_dir, img_name)
+            mask_path = os.path.join(self.mask_dir, img_name.replace(".tif", "_mask.tif"))
+
+            if not os.path.exists(mask_path):
+                continue
+
+            image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            h, w = image.shape
+
+            for y in range(0, h - self.patch_size + 1, self.patch_size):
+                for x in range(0, w - self.patch_size + 1, self.patch_size):
+                    self.patches.append((img_path, mask_path, x, y))
+
+    def __len__(self):
+        return len(self.patches)
+
+    def __getitem__(self, idx):
+        img_path, mask_path, x, y = self.patches[idx]
+
+        image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+
+        image = image[y:y+self.patch_size, x:x+self.patch_size]
+        mask = mask[y:y+self.patch_size, x:x+self.patch_size]
+
+        image = torch.from_numpy(image).float().unsqueeze(0) / 255.0
+        mask = torch.from_numpy(mask).long()
+
+        mask = torch.clamp(mask, min=0, max=3)
+
+        return image, mask, img_path, x, y
+
+
+# 3. 评价指标计算函数
+# ==========================================
+def calculate_metrics(pred, target, num_classes=4):
+    """计算准确率、精确率、召回率、假阳性率"""
+    pred = pred.view(-1).cpu().numpy()
+    target = target.view(-1).cpu().numpy()
+    cm = confusion_matrix(target, pred, labels=range(num_classes))
+
+    results = []
+    for i in range(num_classes):
+        tp = cm[i, i]
+        fn = np.sum(cm[i, :]) - tp
+        fp = np.sum(cm[:, i]) - tp
+        tn = np.sum(cm) - tp - fn - fp
+
+        accuracy = (tp + tn) / np.sum(cm) if np.sum(cm) > 0 else 0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        fall_out = fp / (fp + tn) if (fp + tn) > 0 else 0
+    # 增加IoU和F1score
+        IoU = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0
+        F1 = (2 * tp) / (2 * tp + fp + fn) if (2 * tp + fp + fn) > 0 else 0
+        results.append([accuracy, precision, recall, fall_out, IoU, F1])
+    return np.array(results)
+
+
+# 4. 数据划分与加载
+# ==========================================
+if __name__ == "__main__":
+    all_images = sorted(
+    [f for f in os.listdir(IMAGE_DIR) if f.endswith(".tif")]
+    )
+    # 固定随机种子（保证可复现）
+    np.random.seed(42)
+    np.random.shuffle(all_images)
+
+    n = len(all_images)
+
+    train_imgs = all_images[:int(0.7 * n)]
+    val_imgs   = all_images[int(0.7 * n):int(0.85 * n)]
+    test_imgs  = all_images[int(0.85 * n):]
+
+    print("Train images:", len(train_imgs))
+    print("Val images:", len(val_imgs))
+    print("Test images:", len(test_imgs))
+
+    # 创建 dataset
+    train_ds = BSEPatchDataset(IMAGE_DIR, MASK_DIR, train_imgs, PATCH_SIZE)
+    val_ds   = BSEPatchDataset(IMAGE_DIR, MASK_DIR, val_imgs, PATCH_SIZE)
+    test_ds  = BSEPatchDataset(IMAGE_DIR, MASK_DIR, test_imgs, PATCH_SIZE)
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=1,
+        shuffle=False,
+        num_workers=2
+    )
+
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=1,
+        shuffle=False,
+        num_workers=2
+    )
+
+    print("Train patches:", len(train_ds))
+    print("Val patches:", len(val_ds))
+    print("Test patches:", len(test_ds))
+
+    import numpy as np
+    import torch
+
+    # 4.5 计算类别权重（基于数据分布）
+    # ==========================================
+    print("Calculating class weights...")
+
+    class_counts = np.zeros(NUM_CLASSES)
+
+    for i in range(len(train_ds)):
+        image, mask, img_path, x, y = train_ds[i]  # Unpack all 5 values
+        m = mask.numpy()
+        for c in range(NUM_CLASSES):
+            class_counts[c] += np.sum(m == c)
+
+    class_freq = class_counts / np.sum(class_counts)
+
+    # 使用 sqrt 平滑（推荐）
+    weights = 1 / np.sqrt(class_freq + 1e-6)
+    weights = weights / weights.min()
+
+    print("Class frequencies:", class_freq)
+    print("Class weights:", weights)
+
+    weights = torch.tensor(weights, dtype=torch.float32).to(DEVICE)
+
+    # 5. 模型、损失函数与优化器
+    # ==========================================
+    model = smp.Unet(
+        encoder_name="resnet34",
+        in_channels=1,
+        classes=NUM_CLASSES
+    ).to(DEVICE)
+    dice_loss = smp.losses.DiceLoss(mode='multiclass')
+    ce_loss = nn.CrossEntropyLoss(weight=weights)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+    # 6. 训练与验证循环
+    # ==========================================
+    for epoch in range(EPOCHS):
+        # --- 训练阶段 ---
+        model.train()
+        train_loss = 0
+        running_loss_d = 0
+        running_loss_ce = 0
+        for images, masks, _, _, _ in train_loader:  # Unpack all 5 values, ignore the last three
+            images, masks = images.to(DEVICE), masks.to(DEVICE)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss_d = dice_loss(outputs, masks)
+            loss_ce = ce_loss(outputs, masks)
+            loss = loss_d + loss_ce
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * images.size(0)
+            running_loss_d += loss_d.item() * images.size(0)
+            running_loss_ce += loss_ce.item() * images.size(0)
+
+        # --- 验证阶段 ---
+        model.eval()
+        val_metrics = np.zeros((NUM_CLASSES, 6))
+        with torch.no_grad():
+            for i, (images, masks, img_paths, xs, ys) in enumerate(val_loader):  # Unpack all 5 values
+                images, masks = images.to(DEVICE), masks.to(DEVICE)
+                outputs = model(images)
+                preds = torch.argmax(outputs, dim=1)
+
+                val_metrics += calculate_metrics(preds, masks)
+                # 每个 Epoch 保存前 3 个验证结果图
+                if i < 3:
+                    img_np = images[0, 0].cpu().numpy()
+                    pred_np = preds[0].cpu().numpy()
+                    mask_np = masks[0].cpu().numpy()
+
+                    save_tif_gray(
+                        os.path.join(VAL_IMG_DIR, f"epoch{epoch}_sample{i}.tif"),
+                        img_np
+                    )
+
+                    save_tif_color(
+                        os.path.join(VAL_GT_DIR, f"epoch{epoch}_sample{i}.tif"),
+                        mask_np, cmap
+                    )
+
+                    save_tif_color(
+                        os.path.join(VAL_PRED_DIR, f"epoch{epoch}_sample{i}.tif"),
+                        pred_np, cmap
+                    )
+        avg_val_metrics = val_metrics / len(val_loader)
+        epoch_loss_d = running_loss_d / len(train_loader)
+        epoch_loss_ce = running_loss_ce / len(train_loader)
+        print(f"Epoch [{epoch + 1}/{EPOCHS}] "
+              f"Total: {train_loss / len(train_loader):.4f} | "
+              f"Dice: {epoch_loss_d:.4f} | "
+              f"CE: {epoch_loss_ce:.4f}")
+        print(f"\n--- Epoch [{epoch + 1}/{EPOCHS}] Validation Summary ---")
+        for c in range(NUM_CLASSES):
+            print(
+                f"Class {c}: Recall={avg_val_metrics[c, 2]:.4f}, Fall-out={avg_val_metrics[c, 3]:.4f}, IoU={avg_val_metrics[c, 4]:.4f}, F1={avg_val_metrics[c, 5]:.4f}")
+        print("-" * 30)
+
+    # 7. 最终测试阶段
+    # ==========================================
+    print("\n--- Starting Final Test ---")
+    import cv2
+    import os
+
+    model.eval()
+    # 用于累加所有 Patch 的指标
+    test_metrics_accumulator = np.zeros((NUM_CLASSES, 6))  # [Accuracy, Precision, Recall, Fall-out, IoU, F1]
+    recon_preds = {}
+    recon_masks = {}
+    recon_counts = {}
+    with torch.no_grad():
+        for i, (images, masks, img_paths, xs, ys) in enumerate(test_loader):
+            images = images.to(DEVICE)
+            masks = masks.to(DEVICE)
+
+            # ===== 前向 =====
+            outputs = model(images)
+            preds = torch.argmax(outputs, dim=1)
+
+            # ===== 指标 =====
+            patch_metrics = calculate_metrics(preds, masks, num_classes=NUM_CLASSES)
+            test_metrics_accumulator += patch_metrics
+
+            img_np = images[0, 0].cpu().numpy()
+            pred_np = preds[0].cpu().numpy()
+            mask_np = masks[0].cpu().numpy()
+
+            # ===== 原图 =====
+            save_tif_gray(
+                os.path.join(TEST_IMG_DIR, f"test_{i}.tif"),
+                img_np
+            )
+
+            # ===== GT =====
+            save_tif_color(
+                os.path.join(TEST_GT_DIR, f"test_{i}.tif"),
+                mask_np, cmap
+            )
+
+            # ===== Prediction =====
+            save_tif_color(
+                os.path.join(TEST_PRED_DIR, f"test_{i}.tif"),
+                pred_np, cmap
+            )
+
+            for b in range(images.size(0)):
+                img_name = os.path.basename(img_paths[b])
+
+                if img_name not in recon_preds:
+                    full_img = cv2.imread(img_paths[b], cv2.IMREAD_GRAYSCALE)
+                    h, w = full_img.shape
+
+                    recon_preds[img_name] = np.zeros((h, w))
+                    recon_masks[img_name] = np.zeros((h, w))
+                    recon_counts[img_name] = np.zeros((h, w))
+
+                x = xs[b].item()
+                y = ys[b].item()
+
+                patch_pred = preds[b].cpu().numpy()
+                patch_mask = masks[b].cpu().numpy()
+
+                recon_preds[img_name][y:y + PATCH_SIZE, x:x + PATCH_SIZE] += patch_pred
+                recon_masks[img_name][y:y + PATCH_SIZE, x:x + PATCH_SIZE] += patch_mask
+                recon_counts[img_name][y:y + PATCH_SIZE, x:x + PATCH_SIZE] += 1
+
+    for img_name in recon_preds.keys():
+        pred_full = recon_preds[img_name] / recon_counts[img_name]
+        mask_full = recon_masks[img_name] / recon_counts[img_name]
+
+        pred_full = pred_full.astype(np.uint8)
+        mask_full = mask_full.astype(np.uint8)
+
+        # 原图
+        raw = cv2.imread(os.path.join(IMAGE_DIR, img_name), cv2.IMREAD_GRAYSCALE)
+
+        # 彩色
+        pred_color = label_to_color(pred_full)
+        mask_color = label_to_color(mask_full)
+
+        # 保存（用原图名！！！）
+        cv2.imwrite(os.path.join(TEST_IMG_DIR, img_name), raw)
+        cv2.imwrite(os.path.join(TEST_PRED_DIR, img_name), pred_color)
+        cv2.imwrite(os.path.join(TEST_GT_DIR, img_name), mask_color)
+
+    # 计算所有测试样本的平均值
+    final_metrics = test_metrics_accumulator / len(test_loader)
+    # --- 打印每个 Class 的单独指标 ---
+    print(
+        f"{'Class':<10} | {'Accuracy':<10} | {'Precision':<10} | {'Recall':<10} | {'Fall-out':<10} | {'IoU':<10} | {'F1':<10}")
+    print("-" * 65)
+    for c in range(NUM_CLASSES):
+        print(
+            f"Class {c:<6} | {final_metrics[c, 0]:.4f}   | {final_metrics[c, 1]:.4f}    | {final_metrics[c, 2]:.4f} | {final_metrics[c, 3]:.4f} | {final_metrics[c, 4]:.4f} | {final_metrics[c, 5]:.4f}")
+
+    # --- 计算并打印总指标 (Macro Average) ---
+    # 总指标即所有类别指标的平均值
+    total_accuracy = np.mean(final_metrics[:, 0])
+    total_precision = np.mean(final_metrics[:, 1])
+    total_recall = np.mean(final_metrics[:, 2])
+    total_fall_out = np.mean(final_metrics[:, 3])
+    total_IoU = np.mean(final_metrics[:, 4])
+    total_F1 = np.mean(final_metrics[:, 5])
+
+    print("-" * 65)
+    print(
+        f"{'Average':<10} | {total_accuracy:.4f}   | {total_precision:.4f}    | {total_recall:.4f} | {total_fall_out:.4f}  | {total_IoU:.4f}  | {total_F1:.4f}")
+    print("=" * 50)
+# Save model
+    torch.save(
+        model.state_dict(),
+        os.path.join(OUTPUT_DIR, "unet_resnet34.pth")
+    )
+    model.load_state_dict(torch.load("unet_resnet34.pth"))
